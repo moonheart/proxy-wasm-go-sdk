@@ -532,6 +532,13 @@ func SetSharedData(key string, data []byte, cas uint32) error {
 	return internal.StatusToError(st)
 }
 
+// RemoveSharedData is used for remove the shared data
+func RemoveSharedData(key string, cas uint32) error {
+	st := internal.ProxyRemoveSharedData(internal.StringBytePtr(key),
+		len(key), cas)
+	return internal.StatusToError(st)
+}
+
 // GetProperty is used for retrieving property/metadata in the host
 // for a given path.
 // Available path and properties depend on the host implementation.

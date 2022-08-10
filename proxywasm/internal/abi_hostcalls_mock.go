@@ -43,6 +43,7 @@ type ProxyWasmHost interface {
 	ProxySendLocalResponse(statusCode uint32, statusCodeDetailData *byte, statusCodeDetailsSize int, bodyData *byte, bodySize int, headersData *byte, headersSize int, grpcStatus int32) Status
 	ProxyGetSharedData(keyData *byte, keySize int, returnValueData **byte, returnValueSize *int, returnCas *uint32) Status
 	ProxySetSharedData(keyData *byte, keySize int, valueData *byte, valueSize int, cas uint32) Status
+	ProxyRemoveSharedData(keyData *byte, keySize int, cas uint32) Status
 	ProxyRegisterSharedQueue(nameData *byte, nameSize int, returnID *uint32) Status
 	ProxyResolveSharedQueue(vmIDData *byte, vmIDSize int, nameData *byte, nameSize int, returnID *uint32) Status
 	ProxyDequeueSharedQueue(queueID uint32, returnValueData **byte, returnValueSize *int) Status
