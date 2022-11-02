@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+env:
+  TINYGO_VERSION: 0.25.0
+
 jobs:
   style:
     name: Code style check
@@ -15,7 +18,7 @@ jobs:
       - name: install Go
         uses: actions/setup-go@v3
         with:
-          go-version: '1.18.1'
+          go-version: '1.18'
 
       - name: checkout
         uses: actions/checkout@v3
@@ -33,7 +36,7 @@ jobs:
       - name: install Go
         uses: actions/setup-go@v3
         with:
-          go-version: '1.18.1'
+          go-version: '1.18'
 
       - name: checkout
         uses: actions/checkout@v3
@@ -41,84 +44,66 @@ jobs:
       - name: run tests
         run: make test
 
-  build-examples:
-    name: Build examples
-    runs-on: ubuntu-latest
-    container:
-      image: tinygo/tinygo:0.24.0
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Cache built examples
-        uses: actions/cache@v3
-        id: cache-built-examples
-        with:
-          path: examples
-          key: examples-${{ hashFiles('examples/**', 'proxywasm/**', 'Makefile') }}-tinygo-0.24.0
-
-      - name: Install Go
-        if: steps.cache-built-examples.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v3
-        with:
-          go-version: '1.18.1'
-
-      # TinyGo's release container does not have Make command.
-      - name: Install Make
-        if: steps.cache-built-examples.outputs.cache-hit != 'true'
-        run: apt install make
-
-      - name: Build examples
-        if: steps.cache-built-examples.outputs.cache-hit != 'true'
-        run: make build.examples
-
-  e2e-tests:
+  examples:
+    name: Examples (${{ matrix.envoy-image }})
     strategy:
       fail-fast: false
       matrix:
-        image: [
+        envoy-image: [
           "envoyproxy/envoy-dev:latest",
           "envoyproxy/envoy:v1.19-latest",
           "envoyproxy/envoy:v1.20-latest",
           "envoyproxy/envoy:v1.21-latest",
           "envoyproxy/envoy:v1.22-latest",
           "envoyproxy/envoy:v1.23-latest",
+          "envoyproxy/envoy:v1.24-latest",
           "istio/proxyv2:1.11.7",
           "istio/proxyv2:1.12.4",
           "istio/proxyv2:1.13.1",
           "istio/proxyv2:1.14.0",
+          "istio/proxyv2:1.15.0",
         ]
-    name: E2E Test (${{ matrix.image }})
-    needs: [build-examples]
     runs-on: ubuntu-latest
-    container:
-      image: ${{ matrix.image }}
-      options: --privileged
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v3
-        with:
-          go-version: '1.18.1'
-
-      - name: Print Envoy version
-        run: envoy --version
-
-      - name: Install Make
-        run: apt update && apt install make
-
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Fetch built examples
+      - name: Build cache
         uses: actions/cache@v3
         with:
-          path: examples
-          key: examples-${{ hashFiles('examples/**', 'proxywasm/**', 'Makefile') }}-tinygo-0.24.0
+          path: |
+            ~/.cache/go-build
+            ~/.cache/tinygo
+            ~/go/pkg/mod
+            ~/go/bin
+          key: examples-${{ hashFiles('**/go.mod', '**/go.sum') }}-v${{ env.TINYGO_VERSION }}
+
+      - name: Install Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.18'
+
+      - name: Install TinyGo
+        run: |
+          gh release download v${TINYGO_VERSION} -p '*.linux-amd64.tar.gz' -D ~ -R github.com/tinygo-org/tinygo
+          tar -xf ~/tinygo${TINYGO_VERSION}.linux-amd64.tar.gz  -C $HOME
+          echo "$HOME/tinygo/bin" >> $GITHUB_PATH
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build examples
+        run: make build.examples
+
+      - name: Test examples
+        run: make test.examples
+
+      - name: Install Envoy
+        run: |
+          export ENVOY_BIN_DIR=$HOME/envoy/bin
+          mkdir -p $ENVOY_BIN_DIR
+          docker run -v $ENVOY_BIN_DIR:/tmp/proxy-wasm-go-sdk -w /tmp/proxy-wasm-go-sdk \
+            --entrypoint /bin/cp ${{ matrix.envoy-image }} /usr/local/bin/envoy .
+          echo $ENVOY_BIN_DIR >> $GITHUB_PATH
 
       - name: Run e2e test
         run: make test.e2e
-        env:
-          # Explicitly disable CGO even though we don't use it anywhere. 
-          # That is because envoy containers do not have GCC installed
-          # plus CGO is enbaled by default, which results in build error.
-          CGO_ENABLED: "0"

@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build proxytest
+//go:build !tinygo
 
 package internal
 
 import "github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm/types"
 
-// this file exists only for proxytest package which is used with the `proxytest` build tag.
-//	Therefore, these functions are not included in a resulting Wasm binary
+// this file exists only for proxytest package, therefore, these functions are not included in a resulting Wasm binary.
 
 func ProxyOnVMStart(pluginContextID uint32, vmConfigurationSize int) types.OnVMStartStatus {
 	return proxyOnVMStart(pluginContextID, vmConfigurationSize)

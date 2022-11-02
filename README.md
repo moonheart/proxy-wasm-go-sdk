@@ -1,5 +1,3 @@
-__This project is in its early stage, and the API is likely to change and not stable.__
-
 # WebAssembly for Proxies (Go SDK) [![Build](https://github.com/tetratelabs/proxy-wasm-go-sdk/workflows/Test/badge.svg)](https://github.com/tetratelabs/proxy-wasm-go-sdk/actions) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 The Go SDK for
@@ -13,17 +11,13 @@ This SDK is powered by [TinyGo](https://tinygo.org/) and does not support the of
 
 ## Requirements
 
-- [Go](https://go.dev/dl/) 1.17 or higher.
 - [TinyGo](https://tinygo.org/) - This SDK depends on TinyGo and leverages its [WASI](https://github.com/WebAssembly/WASI) (WebAssembly System Interface) target. Please follow the official instruction [here](https://tinygo.org/getting-started/) for installing TinyGo.
 - [Envoy](https://www.envoyproxy.io) - To run compiled examples, you need to have Envoy binary. We recommend using [func-e](https://func-e.io) as the easiest way to get started with Envoy. Alternatively, you can follow [the official instruction](https://www.envoyproxy.io/docs/envoy/latest/start/install).
 
 ## Installation
 
-`go get` cannot be used for fetching this SDK and updating go.mod of your project due to the existence of "extern" functions which are only available in TinyGo. Instead, we can manually setup go.mod and go.sum via `go mod edit` and `go mod download`: 
-
 ```
-go mod edit -require=github.com/tetratelabs/proxy-wasm-go-sdk@main
-go mod download github.com/tetratelabs/proxy-wasm-go-sdk
+go get github.com/tetratelabs/proxy-wasm-go-sdk
 ```
 
 ## Build and run Examples
@@ -45,6 +39,12 @@ Envoy is the first host side implementation of Proxy-Wasm ABI,
 and we run end-to-end tests with multiple versions of Envoy and Envoy-based [istio/proxy](https://github.com/istio/proxy) in order to verify Proxy-Wasm Go SDK works as expected.
 
 Please refer to [workflow.yaml](.github/workflows/workflow.yaml) for which version is used for End-to-End tests.
+
+## Build tags
+
+The following build tags can be used to customize the behavior of the built plugin:
+
+- `proxywasm_timing`: Enables logging of time spent in invocation of the plugin's exported functions. This can be useful for debugging performance issues.
 
 ## Contributing
 

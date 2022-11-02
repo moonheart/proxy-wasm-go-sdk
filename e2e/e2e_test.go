@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 	"testing"
@@ -92,34 +91,42 @@ func Test_http_body(t *testing.T) {
 	stdErr, kill := startEnvoy(t, 8001)
 	defer kill()
 
-	for _, tc := range []struct {
-		op, expBody string
-	}{
-		{op: "append", expBody: `[original body][this is appended body]`},
-		{op: "prepend", expBody: `[this is prepended body][original body]`},
-		{op: "replace", expBody: `[this is replaced body]`},
-		// Should fall back to to the replace.
-		{op: "invalid", expBody: `[this is replaced body]`},
+	for _, mode := range []string{
+		"request",
+		"response",
 	} {
-		t.Run(tc.op, func(t *testing.T) {
-			require.Eventually(t, func() bool {
-				req, err := http.NewRequest("PUT", "http://localhost:18000/anything",
-					bytes.NewBuffer([]byte(`[original body]`)))
-				require.NoError(t, err)
-				req.Header.Add("buffer-operation", tc.op)
-				res, err := http.DefaultClient.Do(req)
-				if err != nil {
-					return false
-				}
-				defer res.Body.Close()
-				body, err := io.ReadAll(res.Body)
-				require.NoError(t, err)
-				return string(body) == tc.expBody &&
-					checkMessage(stdErr.String(), []string{
-						`original request body: [original body]`},
-						[]string{"failed to"},
-					) && checkMessage(string(body), []string{tc.expBody}, nil)
-			}, 5*time.Second, 500*time.Millisecond, stdErr.String())
+		t.Run(mode, func(t *testing.T) {
+			for _, tc := range []struct {
+				op, expBody string
+			}{
+				{op: "append", expBody: `[original body][this is appended body]`},
+				{op: "prepend", expBody: `[this is prepended body][original body]`},
+				{op: "replace", expBody: `[this is replaced body]`},
+				// Should fall back to to the replace.
+				{op: "invalid", expBody: `[this is replaced body]`},
+			} {
+				tc := tc
+				t.Run(tc.op, func(t *testing.T) {
+					require.Eventually(t, func() bool {
+						req, err := http.NewRequest("PUT", "http://localhost:18000/anything",
+							bytes.NewBuffer([]byte(`[original body]`)))
+						require.NoError(t, err)
+						req.Header.Add("buffer-replace-at", mode)
+						req.Header.Add("buffer-operation", tc.op)
+						res, err := http.DefaultClient.Do(req)
+						if err != nil {
+							return false
+						}
+						defer res.Body.Close()
+						body, err := io.ReadAll(res.Body)
+						require.NoError(t, err)
+						return tc.expBody == string(body) && checkMessage(stdErr.String(), []string{
+							fmt.Sprintf(`original %s body: [original body]`, mode)},
+							[]string{"failed to"},
+						)
+					}, 5*time.Second, 500*time.Millisecond)
+				})
+			}
 		})
 	}
 }
@@ -233,6 +240,9 @@ func Test_network(t *testing.T) {
 			"upstream data received",
 			"connection complete!",
 			"remote address: 127.0.0.1:",
+			"upsteam cluster matadata location[region]=ap-northeast-1",
+			"upsteam cluster matadata location[cloud_provider]=aws",
+			"upsteam cluster matadata location[az]=ap-northeast-1a",
 		}, nil)
 	}, 5*time.Second, time.Millisecond, stdErr.String())
 }
@@ -251,6 +261,46 @@ func Test_postpone_requests(t *testing.T) {
 			"resume request with contextID=2",
 		}, nil)
 	}, 6*time.Second, time.Millisecond, stdErr.String())
+}
+
+func Test_properties(t *testing.T) {
+	stdErr, kill := startEnvoy(t, 8001)
+	defer kill()
+	require.Eventually(t, func() bool {
+		baseUrl := "http://localhost:18000"
+		for _, tt := range []struct {
+			pathname   string
+			authHeader [2]string
+			status     int
+		}{
+			{"/one", [2]string{}, http.StatusUnauthorized},
+			{"/one", [2]string{"cookie", "value"}, http.StatusOK},
+			{"/two", [2]string{}, http.StatusUnauthorized},
+			{"/two", [2]string{"authorization", "token"}, http.StatusOK},
+			{"/three", [2]string{}, http.StatusOK},
+		} {
+			req, err := http.NewRequest("GET", baseUrl+tt.pathname, nil)
+			require.NoError(t, err)
+			if tt.authHeader[0] != "" && tt.authHeader[1] != "" {
+				req.Header.Add(tt.authHeader[0], tt.authHeader[1])
+			}
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return false
+			}
+			defer res.Body.Close()
+
+			if res.StatusCode != tt.status {
+				return false
+			}
+		}
+
+		return checkMessage(stdErr.String(), []string{
+			"auth header is \"cookie\"",
+			"auth header is \"authorization\"",
+			"no auth header for route",
+		}, nil)
+	}, 5*time.Second, time.Millisecond, stdErr.String())
 }
 
 func Test_shared_data(t *testing.T) {
@@ -323,7 +373,7 @@ func Test_json_validation(t *testing.T) {
 		}
 		defer res.Body.Close()
 
-		_, err = io.Copy(ioutil.Discard, res.Body)
+		_, err = io.Copy(io.Discard, res.Body)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusForbidden, res.StatusCode)
 
@@ -337,10 +387,39 @@ func Test_json_validation(t *testing.T) {
 		}
 		defer res.Body.Close()
 
-		_, err = io.Copy(ioutil.Discard, res.Body)
+		_, err = io.Copy(io.Discard, res.Body)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, res.StatusCode)
 
 		return true
+	}, 5*time.Second, time.Millisecond, stdErr.String())
+}
+
+func Test_multiple_dispatches(t *testing.T) {
+	stdErr, kill := startEnvoy(t, 8001)
+	defer kill()
+
+	require.Eventually(t, func() bool {
+		res, err := http.Get("http://localhost:18000")
+		if err != nil || res.StatusCode != http.StatusOK {
+			return false
+		}
+		defer res.Body.Close()
+		return res.StatusCode == http.StatusOK
+	}, 5*time.Second, time.Millisecond, "Endpoint not healthy.")
+
+	require.Eventually(t, func() bool {
+		return checkMessage(stdErr.String(), []string{
+			"wasm log: pending dispatched requests: 9",
+			"wasm log: pending dispatched requests: 8",
+			"wasm log: pending dispatched requests: 7",
+			"wasm log: pending dispatched requests: 6",
+			"wasm log: pending dispatched requests: 5",
+			"wasm log: pending dispatched requests: 4",
+			"wasm log: pending dispatched requests: 3",
+			"wasm log: pending dispatched requests: 2",
+			"wasm log: pending dispatched requests: 1",
+			"wasm log: response resumed after processed 10 dispatched request",
+		}, nil)
 	}, 5*time.Second, time.Millisecond, stdErr.String())
 }

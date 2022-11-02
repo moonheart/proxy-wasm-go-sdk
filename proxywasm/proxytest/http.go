@@ -29,7 +29,15 @@ type (
 	httpStreamState struct {
 		requestHeaders, responseHeaders   [][2]string
 		requestTrailers, responseTrailers [][2]string
-		requestBody, responseBody         []byte
+
+		// bodyBuffer keeps the body read so far when plugins request buffering
+		// by returning types.ActionPause. Buffers are cleared when types.ActionContinue
+		// is returned.
+		requestBodyBuffer, responseBodyBuffer []byte
+		// body is the body visible to the plugin, which will include anything
+		// in its bodyBuffer as well. If types.ActionContinue is returned, the
+		// content of body is sent to the upstream or downstream.
+		requestBody, responseBody []byte
 
 		action            types.Action
 		sentLocalResponse *LocalHttpResponse
@@ -58,7 +66,7 @@ func (h *httpHostEmulator) httpHostEmulatorProxyGetBufferBytes(bt internal.Buffe
 	case internal.BufferTypeHttpRequestBody:
 		buf = stream.requestBody
 	case internal.BufferTypeHttpResponseBody:
-		buf = stream.requestBody
+		buf = stream.responseBody
 	default:
 		panic("unreachable: maybe a bug in this host emulation or SDK")
 	}
@@ -406,9 +414,15 @@ func (h *httpHostEmulator) CallOnRequestBody(contextID uint32, body []byte, endO
 		log.Fatalf("invalid context id: %d", contextID)
 	}
 
-	cs.requestBody = append(cs.requestBody, body...)
+	cs.requestBody = append(cs.requestBodyBuffer, body...)
 	cs.action = internal.ProxyOnRequestBody(contextID,
 		len(body), endOfStream)
+	if cs.action == types.ActionPause {
+		// Buffering requested
+		cs.requestBodyBuffer = cs.requestBody
+	} else {
+		cs.requestBodyBuffer = nil
+	}
 	return cs.action
 }
 
@@ -419,9 +433,15 @@ func (h *httpHostEmulator) CallOnResponseBody(contextID uint32, body []byte, end
 		log.Fatalf("invalid context id: %d", contextID)
 	}
 
-	cs.responseBody = body
+	cs.responseBody = append(cs.responseBodyBuffer, body...)
 	cs.action = internal.ProxyOnResponseBody(contextID,
 		len(body), endOfStream)
+	if cs.action == types.ActionPause {
+		// Buffering requested
+		cs.responseBodyBuffer = cs.responseBody
+	} else {
+		cs.responseBodyBuffer = nil
+	}
 	return cs.action
 }
 
@@ -468,6 +488,57 @@ func (h *httpHostEmulator) GetCurrentRequestBody(contextID uint32) []byte {
 }
 
 // impl HostEmulator
+func (h *httpHostEmulator) GetCurrentResponseBody(contextID uint32) []byte {
+	stream, ok := h.httpStreams[contextID]
+	if !ok {
+		log.Fatalf("invalid context id: %d", contextID)
+	}
+	return stream.responseBody
+}
+
+// impl HostEmulator
 func (h *httpHostEmulator) GetSentLocalResponse(contextID uint32) *LocalHttpResponse {
 	return h.httpStreams[contextID].sentLocalResponse
+}
+
+// impl HostEmulator
+func (h *httpHostEmulator) GetProperty(path []string) ([]byte, error) {
+	if len(path) == 0 {
+		log.Printf("path must not be empty")
+		return nil, internal.StatusToError(internal.StatusBadArgument)
+	}
+	var ret *byte
+	var retSize int
+	raw := internal.SerializePropertyPath(path)
+
+	err := internal.StatusToError(internal.ProxyGetProperty(&raw[0], len(raw), &ret, &retSize))
+	if err != nil {
+		return nil, err
+	}
+	return internal.RawBytePtrToByteSlice(ret, retSize), nil
+}
+
+// impl HostEmulator
+func (h *httpHostEmulator) GetPropertyMap(path []string) ([][2]string, error) {
+	b, err := h.GetProperty(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return internal.DeserializeMap(b), nil
+}
+
+// impl HostEmulator
+func (h *httpHostEmulator) SetProperty(path []string, data []byte) error {
+	if len(path) == 0 {
+		log.Printf("path must not be empty")
+		return internal.StatusToError(internal.StatusBadArgument)
+	} else if len(data) == 0 {
+		log.Printf("data must not be empty")
+		return internal.StatusToError(internal.StatusBadArgument)
+	}
+	raw := internal.SerializePropertyPath(path)
+	return internal.StatusToError(internal.ProxySetProperty(
+		&raw[0], len(raw), &data[0], len(data),
+	))
 }
